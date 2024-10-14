@@ -1,0 +1,16 @@
+{
+  "name": "btc-tx-tracker",
+  "version": "1.0.0",
+  "description": "This will track transaction for a given btc address and send a notification via a telegram bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
