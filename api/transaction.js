@@ -136,7 +136,7 @@ async function trackTransactions(userId, address, lastBlockTime, pendingTxMessag
         }
 
         lastBlockTime = lastBlockTime+1; // Increment lastBlockTime by 1 to avoid duplicate messages
-        console.log(`[${userId}] Transactions processed successfully!. Next check in 60 seconds.`);
+        console.log(`[${userId}] Transactions processed successfully!. Next check in 1 minutes.`);
         return lastBlockTime;
 
     } catch (error) {

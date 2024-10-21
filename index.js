@@ -1,11 +1,14 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
+const cron = require('node-cron');
 const { trackTransactions } = require('./api/transaction');
 const { getRuneBalance, getBrc20Balance } = require('./api/unisat');
 const { sendTelegramMessage, updateTelegramMessage } = require('./api/telegram');
+const { checkGasFee } = require('./api/gas');
 
 
+let users = {}; // In-memory storage for users and addresses
 const userStates = {}; // To store both state and timeout for each user
 
 
@@ -14,7 +17,6 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
     polling: true
 });
 
-let users = {}; // In-memory storage for users and addresses
 
 // Load existing users from a file if needed
 if (fs.existsSync('users.json')) {
@@ -22,9 +24,10 @@ if (fs.existsSync('users.json')) {
         users = JSON.parse(fs.readFileSync('users.json'));
     } catch (error) {
         console.error('Error reading users.json:', error.message);
-        users = {}; // Fallback to an empty object on error
+        users = {};
     }
 }
+
 
 // Save users to a file
 function saveUsers() {
@@ -44,8 +47,7 @@ function isValidBitcoinAddress(address) {
 }
 
 
-
-// Command to start the registration process
+// Address registration 
 bot.onText(/\/register/, (msg) => {
     const userId = msg.chat.id;
 
@@ -53,13 +55,11 @@ bot.onText(/\/register/, (msg) => {
     if (users[userId]) {
         return sendTelegramMessage(userId, '⚠️ You have already registered your wallet!', bot);
     }
-
-    // Ask the user for their Bitcoin address
-    sendTelegramMessage(userId, '💳 Please send me your Bitcoin wallet address (Timeout in 2 minutes):', bot);
+    sendTelegramMessage(userId, '💳 Please send your Bitcoin wallet address (Timeout in 2 minutes):', bot);
 
     // Set the user state to 'awaiting_address' and store a timeout
     if (userStates[userId]?.timeout) {
-        clearTimeout(userStates[userId].timeout); // Clear any previous timeouts
+        clearTimeout(userStates[userId].timeout);
     }
 
     userStates[userId] = {
@@ -69,8 +69,50 @@ bot.onText(/\/register/, (msg) => {
                 sendTelegramMessage(userId, '⌛ Timeout: You didn’t provide your Bitcoin address in time. Please try again layer.', bot);
                 delete userStates[userId]; // Clear user state after timeout
             }
-        }, 120000) // Timeout set to 60 seconds (1 minute)
+        }, 120000) // Timeout set to 2 minutes
     };
+});
+
+
+// setting gas price thrreshold for the user (to recive gas alerts when gas price drop below the threshold) 
+bot.onText(/\/setGas/, (msg) => {
+    const userId = msg.chat.id;
+
+    // Check if the user is registered
+    if (!users[userId]) {
+        return sendTelegramMessage(userId, '⚠️ You have not registered your wallet yet!', bot);
+    }
+    sendTelegramMessage(userId, '🖊 Please send your preferred gas price threshold (Timeout in 2 minutes):', bot);
+
+    // Set the user state to 'awaiting_address' and store a timeout
+    if (userStates[userId]?.timeout) {
+        clearTimeout(userStates[userId].timeout);
+    }
+
+    userStates[userId] = {
+        state: 'awaiting_threshold',
+        timeout: setTimeout(() => {
+            if (userStates[userId]?.state === 'awaiting_threshold') {
+                sendTelegramMessage(userId, '⌛ Timeout: You didn’t provide a gas price threshold in time. Please try again layer.', bot);
+                delete userStates[userId]; // Clear user state after timeout
+            }
+        }, 120000) // Timeout set to 2 minutes
+    };
+});
+
+
+// remove gas price thrreshold for the user 
+bot.onText(/\/removeGas/, (msg) => {
+    const userId = msg.chat.id;
+
+    // Check if the user has set a gas threshold
+    if (!users[userId].gasThreshold) {
+        return sendTelegramMessage(userId, '⚠️ You have not set a gas price threshold yet.', bot);
+    }
+    delete users[userId].gasThreshold;
+    saveUsers();
+
+    sendTelegramMessage(userId, '🗑 Your gas price threshold has been removed. You will no longer receive gas alerts!', bot);
 });
 
 
@@ -81,7 +123,6 @@ bot.on('message', (msg) => {
 
     // Check if the user is in the 'awaiting_address' state
     if (userStates[userId]?.state === 'awaiting_address') {
-        // Validate the Bitcoin address
         if (!isValidBitcoinAddress(text)) {
             return sendTelegramMessage(userId, '⚠️ Invalid Bitcoin address. Please send again.', bot);
         }
@@ -103,6 +144,45 @@ bot.on('message', (msg) => {
 
         // Confirm registration and clear the user's state and timeout
         const message = `💳 Your Bitcoin wallet ${address} has been registered!\n\nYou will now receive transaction alerts.`;
+        sendTelegramMessage(userId, message, bot);
+    }
+
+    // Check if the user is in the 'awaiting_edit' state
+    else if (userStates[userId]?.state === 'awaiting_edit') {
+        // Validate the new Bitcoin address
+        if (!isValidBitcoinAddress(text)) {
+            return sendTelegramMessage(userId, '⚠️ Invalid Bitcoin address. Please send a valid address.', bot);
+        }
+
+        // Clear user state and timeout after successful edit
+        clearTimeout(userStates[userId].timeout);
+        delete userStates[userId];
+
+        // Update the user's address with the new one
+        users[userId].address = text;
+        saveUsers();
+
+        // Confirm the update
+        const message = `💳 Your Bitcoin wallet address has been updated to: ${text}`;
+        sendTelegramMessage(userId, message, bot);
+    }
+
+    // Check if the user is in the 'awaiting_threshold' state
+    else if (userStates[userId]?.state === 'awaiting_threshold') {
+        // Validate the gas price threshold
+        if (!/^\-?\d+$/.test(text)) {
+            return sendTelegramMessage(userId, '⚠️ Invalid gas price threshold (must be an integer). Please send again.', bot);
+        }
+        const parsedValue = parseInt(text, 10);
+
+        // Clear the user's state and timeout after successful registration
+        clearTimeout(userStates[userId].timeout);
+        delete userStates[userId];
+
+        users[userId].gasThreshold = parsedValue;
+        saveUsers();
+
+        const message = `⛽️ Your gas price threshold has been set to: ${parsedValue} sat/vB`;
         sendTelegramMessage(userId, message, bot);
     }
 });
@@ -129,7 +209,6 @@ bot.onText(/\/rune/, async (msg) => {
             return;
         }
 
-        // Construct the message with each rune's ticker, name, and balance
         let message = `🔮 *Rune Balances*\n\n`;
         runeBalances.forEach(rune => {
             const balance = Number(rune.amount);
@@ -139,7 +218,6 @@ bot.onText(/\/rune/, async (msg) => {
 
         sendTelegramMessage(userId, message, bot);
     } catch (error) {
-        // Handle error (e.g., API error or network issue)
         console.error('Error fetching rune balance:', error);
         sendTelegramMessage(userId, '⚠️ Failed to fetch rune balances. Please try again later.', bot);
     }
@@ -167,24 +245,22 @@ bot.onText(/\/brc20/, async (msg) => {
             return;
         }
 
-        // Construct the message with each token's ticker and overall balance
         let message = `💰 *BRC20 Balances*\n\n`;
         brc20Balances.forEach(token => {
-            const balance = Number(token.balance);  // Using overallBalance from the BRC20 data
+            const balance = Number(token.balance);
             const formattedAmount = balance.toLocaleString();
             message += `[${token.ticker}](https://unisat.io/market/brc20?tick=${token.ticker}): ${formattedAmount}\n`;
         });
 
         sendTelegramMessage(userId, message, bot);
     } catch (error) {
-        // Handle error (e.g., API error or network issue)
         console.error('Error fetching BRC20 balance:', error);
         sendTelegramMessage(userId, '⚠️ Failed to fetch BRC20 token balances. Please try again later.', bot);
     }
 });
 
 
-// Command to check Ordinals balance
+// Check Ordinals balance
 bot.onText(/\/ordinals/, (msg) => {
     const userId = msg.chat.id;
     const message = '🛠️ The Ordinals feature is coming soon! Stay tuned!';
@@ -192,7 +268,7 @@ bot.onText(/\/ordinals/, (msg) => {
 });
 
 
-// Command to display the registered Bitcoin address
+// Display the registered Bitcoin address
 bot.onText(/\/user/, (msg) => {
     const userId = msg.chat.id;
 
@@ -206,13 +282,13 @@ bot.onText(/\/user/, (msg) => {
 });
 
 
-// Command to unregister the user and remove their Bitcoin address
+// Unregister the user and remove their Bitcoin address
 bot.onText(/\/unregister/, (msg) => {
     const userId = msg.chat.id;
 
     // Check if the user has registered an address
     if (users[userId]) {
-        delete users[userId]; // Remove user from the users object
+        delete users[userId];
         saveUsers();
         sendTelegramMessage(userId, '🗑️ Your Bitcoin wallet address has been unregistered.', bot);
     } else {
@@ -221,7 +297,7 @@ bot.onText(/\/unregister/, (msg) => {
 });
 
 
-// Command to handle the /start command
+// Handle the /start command
 bot.onText(/\/start/, (msg) => {
     const userId = msg.chat.id;
     const startMessage = `Welcome to the Bitcoin Transaction Tracker Bot! \n\n` +
@@ -230,7 +306,7 @@ bot.onText(/\/start/, (msg) => {
 });
 
 
-// Command to start editing the registered Bitcoin address
+// Edit the registered Bitcoin address
 bot.onText(/\/edit/, (msg) => {
     const userId = msg.chat.id;
 
@@ -239,54 +315,38 @@ bot.onText(/\/edit/, (msg) => {
         return sendTelegramMessage(userId, '⚠️ You have not registered a Bitcoin address yet. Use /register to register.', bot);
     }
 
-    // Ask for the new Bitcoin address
     sendTelegramMessage(userId, '✏️ Please send your new Bitcoin wallet address (Timeout in 2 minutes):', bot);
 
     // Set the state to 'awaiting_edit' for the user
     if (userStates[userId]?.timeout) {
-        clearTimeout(userStates[userId].timeout); // Clear any previous timeouts
+        clearTimeout(userStates[userId].timeout);
     }
-
     userStates[userId] = {
         state: 'awaiting_edit',
         timeout: setTimeout(() => {
             if (userStates[userId]?.state === 'awaiting_edit') {
                 sendTelegramMessage(userId, '⌛ Timeout: You didn’t provide the new address in time. Please try again later.', bot);
-                delete userStates[userId]; // Clear the user state after timeout
+                delete userStates[userId];
             }
-        }, 120000) // Timeout set to 2 minutes
+        }, 120000) // 2 minutes
     };
 });
 
 
-// Global listener for the /edit command to capture the new address
-bot.on('message', (msg) => {
+// Get the current gas price of the Bitcoin network
+bot.onText(/\/gas/, async (msg) => {
     const userId = msg.chat.id;
-    const text = msg.text;
 
-    // Check if the user is in the 'awaiting_edit' state
-    if (userStates[userId]?.state === 'awaiting_edit') {
-        // Validate the new Bitcoin address
-        if (!isValidBitcoinAddress(text)) {
-            return sendTelegramMessage(userId, '⚠️ Invalid Bitcoin address. Please send a valid address.', bot);
-        }
+    const gasFees = await checkGasFee();
 
-        // Clear user state and timeout after successful edit
-        clearTimeout(userStates[userId].timeout);
-        delete userStates[userId];
-
-        // Update the user's address with the new one
-        users[userId].address = text;
-        saveUsers();
-
-        // Confirm the update
-        const message = `💳 Your Bitcoin wallet address has been updated to: ${text}`;
-        sendTelegramMessage(userId, message, bot);
-    }
+    const startMessage = `🚀 Fast :  ${gasFees[0]} sat/vB\n` +
+                         `🚗 Average :  ${gasFees[1]} sat/vB\n` +
+                         `🐢 Slow :  ${gasFees[2]} sat/vB\n`;
+    const messageId = sendTelegramMessage(userId, startMessage, bot);
 });
 
 
-// Command to display the list of available commands
+// Display the list of available commands
 bot.onText(/\/help/, (msg) => {
     const userId = msg.chat.id;
     const helpMessage = `
@@ -296,6 +356,9 @@ bot.onText(/\/help/, (msg) => {
     /user - View your registered Bitcoin address
     /unregister - Remove your registered Bitcoin address
     /edit - Edit your registered Bitcoin address
+    /gas - Check the current gas price
+    /setGas - Set a gas price threshold for alerts
+    /removeGas - Remove your gas price threshold
     /rune - Check your Rune balances
     /brc20 - Check your BRC20 token balances
     /ordinals - Check Ordinals (Coming Soon)
@@ -304,8 +367,8 @@ bot.onText(/\/help/, (msg) => {
 });
 
 
-// Periodically track transactions for all users
-setInterval(async () => {
+// Schedule the job to run every 2 minutes
+cron.schedule('*/1 * * * *', async () => {
     for (const userId in users) {
         const { address, lastBlockTime, pendingTxMessages } = users[userId];
 
@@ -318,8 +381,29 @@ setInterval(async () => {
             }
         } catch (error) {
             console.error(`Error tracking transactions for user ${userId}:`, error.message);
-            // Optionally send a message to the user about the error
-            bot.sendMessage(userId, `An error occurred while tracking your transactions: ${error.message}`);
+            bot.sendMessage(userId, `An error occurred while tracking your transactions. We are working to resolve this issue.`);
         }
     }
-}, 60000);
+});
+
+// Schedule gas fee check every 2 minutes
+cron.schedule('*/2 * * * *', async () => {
+    try {
+        // Fetch the current gas fees
+        const gasFees = await checkGasFee();
+        const gasPrice = gasFees[1]; // Using the average gas price
+
+        for (const userId in users) {
+            const { gasThreshold } = users[userId];
+
+            if (gasThreshold && gasPrice <= gasThreshold) {
+                const message = `⛽️ Gas Price Alert!\n\n` +
+                                `Current Gas Fee: ${gasPrice} sat/vB\n\n` +
+                                `Use /removeGas to stop receiving gas alerts.`;
+                sendTelegramMessage(userId, message, bot);
+            }
+        }
+    } catch (error) {
+        console.error('Error in gas fee check:', error.message);
+    }
+});
