@@ -397,8 +397,8 @@ cron.schedule('*/2 * * * *', async () => {
             const { gasThreshold } = users[userId];
 
             if (gasThreshold && gasPrice <= gasThreshold) {
-                const message = `⛽️ Gas Price Alert!\n\n` +
-                                `Current Gas Fee: ${gasPrice} sat/vB\n\n` +
+                const message = `⛽️ *Gas Price Alert!*\n\n` +
+                                `Current Gas Fee: *${gasPrice}* sat/vB\n\n` +
                                 `Use /removeGas to stop receiving gas alerts.`;
                 sendTelegramMessage(userId, message, bot);
             }
