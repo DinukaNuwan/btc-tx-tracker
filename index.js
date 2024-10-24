@@ -75,7 +75,7 @@ bot.onText(/\/register/, (msg) => {
 
 
 // setting gas price thrreshold for the user (to recive gas alerts when gas price drop below the threshold) 
-bot.onText(/\/setGas/, (msg) => {
+bot.onText(/\/set_gas/, (msg) => {
     const userId = msg.chat.id;
 
     // Check if the user is registered
@@ -102,7 +102,7 @@ bot.onText(/\/setGas/, (msg) => {
 
 
 // remove gas price thrreshold for the user 
-bot.onText(/\/removeGas/, (msg) => {
+bot.onText(/\/remove_gas/, (msg) => {
     const userId = msg.chat.id;
 
     // Check if the user has set a gas threshold
