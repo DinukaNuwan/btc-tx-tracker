@@ -47,6 +47,26 @@ function isValidBitcoinAddress(address) {
 }
 
 
+// Utility to set and clear timeouts for user states
+function setUserState(userId, state, duration, timeoutMessage) {
+    // Clear existing timeout if it exists
+    if (userStates[userId]?.timeout) {
+        clearTimeout(userStates[userId].timeout);
+    }
+
+    // Set the new state and timeout
+    userStates[userId] = {
+        state,
+        timeout: setTimeout(() => {
+            if (userStates[userId]?.state === state) {
+                sendTelegramMessage(userId, timeoutMessage, bot);
+                delete userStates[userId]; // Clear user state after timeout
+            }
+        }, duration)
+    };
+}
+
+
 // Address registration 
 bot.onText(/\/register/, (msg) => {
     const userId = msg.chat.id;
@@ -57,20 +77,7 @@ bot.onText(/\/register/, (msg) => {
     }
     sendTelegramMessage(userId, '💳 Please send your Bitcoin wallet address (Timeout in 2 minutes):', bot);
 
-    // Set the user state to 'awaiting_address' and store a timeout
-    if (userStates[userId]?.timeout) {
-        clearTimeout(userStates[userId].timeout);
-    }
-
-    userStates[userId] = {
-        state: 'awaiting_address',
-        timeout: setTimeout(() => {
-            if (userStates[userId]?.state === 'awaiting_address') {
-                sendTelegramMessage(userId, '⌛ Timeout: You didn’t provide your Bitcoin address in time. Please try again layer.', bot);
-                delete userStates[userId]; // Clear user state after timeout
-            }
-        }, 120000) // Timeout set to 2 minutes
-    };
+    setUserState(userId, 'awaiting_address', 120000, '⌛ Timeout: You didn’t provide your Bitcoin address in time. Please try again.');
 });
 
 
@@ -84,20 +91,7 @@ bot.onText(/\/set_gas/, (msg) => {
     }
     sendTelegramMessage(userId, '🖊 Please send your preferred gas price threshold (Timeout in 2 minutes):', bot);
 
-    // Set the user state to 'awaiting_address' and store a timeout
-    if (userStates[userId]?.timeout) {
-        clearTimeout(userStates[userId].timeout);
-    }
-
-    userStates[userId] = {
-        state: 'awaiting_threshold',
-        timeout: setTimeout(() => {
-            if (userStates[userId]?.state === 'awaiting_threshold') {
-                sendTelegramMessage(userId, '⌛ Timeout: You didn’t provide a gas price threshold in time. Please try again layer.', bot);
-                delete userStates[userId]; // Clear user state after timeout
-            }
-        }, 120000) // Timeout set to 2 minutes
-    };
+    setUserState(userId, 'awaiting_threshold', 120000, '⌛ Timeout: You didn’t provide a gas price threshold in time. Please try again layer.');
 });
 
 
@@ -302,7 +296,7 @@ bot.onText(/\/start/, (msg) => {
     const userId = msg.chat.id;
     const startMessage = `Welcome to the Bitcoin Transaction Tracker Bot! \n\n` +
                          `Use the command /register to start receiving transaction alerts.\n`;
-    const messageId = sendTelegramMessage(userId, startMessage, bot);
+    sendTelegramMessage(userId, startMessage, bot);
 });
 
 
@@ -342,27 +336,24 @@ bot.onText(/\/gas/, async (msg) => {
     const startMessage = `🚀 Fast :  ${gasFees[0]} sat/vB\n` +
                          `🚗 Average :  ${gasFees[1]} sat/vB\n` +
                          `🐢 Slow :  ${gasFees[2]} sat/vB\n`;
-    const messageId = sendTelegramMessage(userId, startMessage, bot);
+    sendTelegramMessage(userId, startMessage, bot);
 });
 
 
 // Display the list of available commands
 bot.onText(/\/help/, (msg) => {
     const userId = msg.chat.id;
-    const helpMessage = `
-    📜 *Available Commands*:
-
-    /register - Register your Bitcoin wallet address
-    /user - View your registered Bitcoin address
-    /unregister - Remove your registered Bitcoin address
-    /edit - Edit your registered Bitcoin address
-    /gas - Check the current gas price
-    /setGas - Set a gas price threshold for alerts
-    /removeGas - Remove your gas price threshold
-    /rune - Check your Rune balances
-    /brc20 - Check your BRC20 token balances
-    /ordinals - Check Ordinals (Coming Soon)
-    `;
+    const helpMessage = `📜 *Available Commands*\n\n` +
+                        `/register - Register your Bitcoin wallet address\n` +
+                        `/user - View your registered Bitcoin address\n` +
+                        `/unregister - Remove your registered Bitcoin address\n` +
+                        `/edit - Edit your registered Bitcoin address\n` +
+                        `/gas - Check the current gas price\n` +
+                        `/set_gas - Set a gas price threshold for alerts\n` +
+                        `/remove_gas - Remove your gas price threshold\n` +
+                        `/rune - Check your Rune balances\n` +
+                        `/brc20 - Check your BRC20 token balances\n` +
+                        `/ordinals - Check Ordinals (Coming Soon)`;       
     sendTelegramMessage(userId, helpMessage, bot);
 });
 
@@ -386,8 +377,8 @@ cron.schedule('*/1 * * * *', async () => {
     }
 });
 
-// Schedule gas fee check every 2 minutes
-cron.schedule('*/2 * * * *', async () => {
+// Schedule gas fee check every 4 minutes
+cron.schedule('*/5 * * * *', async () => {
     try {
         // Fetch the current gas fees
         const gasFees = await checkGasFee();
@@ -397,9 +388,7 @@ cron.schedule('*/2 * * * *', async () => {
             const { gasThreshold } = users[userId];
 
             if (gasThreshold && gasPrice <= gasThreshold) {
-                const message = `⛽️ *Gas Price Alert!*\n\n` +
-                                `Current Gas Fee: *${gasPrice}* sat/vB\n\n` +
-                                `Use /removeGas to stop receiving gas alerts.`;
+                const message = `⛽️ *Gas Price Alert!* *${gasPrice}* sat/vB`;
                 sendTelegramMessage(userId, message, bot);
             }
         }
