@@ -380,7 +380,7 @@ cron.schedule('*/1 * * * *', async () => {
 });
 
 // Schedule gas fee check every 4 minutes
-cron.schedule('*/1 * * * *', async () => {
+cron.schedule('*/5 * * * *', async () => {
     try {
         // Fetch the current gas fees
         const gasFees = await checkGasFee();
