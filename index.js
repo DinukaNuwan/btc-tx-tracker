@@ -4,7 +4,7 @@ const fs = require('fs');
 const cron = require('node-cron');
 const { trackTransactions } = require('./api/transaction');
 const { getRuneBalance, getBrc20Balance } = require('./api/unisat');
-const { sendTelegramMessage, updateTelegramMessage } = require('./api/telegram');
+const { sendTelegramMessage, updateTelegramMessage, deleteTelegramMessage } = require('./api/telegram');
 const { checkGasFee } = require('./api/gas');
 
 
@@ -104,6 +104,7 @@ bot.onText(/\/remove_gas/, (msg) => {
         return sendTelegramMessage(userId, '⚠️ You have not set a gas price threshold yet.', bot);
     }
     delete users[userId].gasThreshold;
+    delete users[userId].previousGasMessageId;
     saveUsers();
 
     sendTelegramMessage(userId, '🗑 Your gas price threshold has been removed. You will no longer receive gas alerts!', bot);
@@ -132,7 +133,7 @@ bot.on('message', (msg) => {
         users[userId] = {
             address,
             lastBlockTime: currentTimestampInSeconds,
-            pendingTxMessages: {} // Each user has their own pending transactions
+            pendingTxMessages: {},
         };
         saveUsers();
 
@@ -174,6 +175,7 @@ bot.on('message', (msg) => {
         delete userStates[userId];
 
         users[userId].gasThreshold = parsedValue;
+        users[userId].previousGasMessageId = null;
         saveUsers();
 
         const message = `⛽️ Your gas price threshold has been set to: ${parsedValue} sat/vB`;
@@ -378,7 +380,7 @@ cron.schedule('*/1 * * * *', async () => {
 });
 
 // Schedule gas fee check every 4 minutes
-cron.schedule('*/5 * * * *', async () => {
+cron.schedule('*/1 * * * *', async () => {
     try {
         // Fetch the current gas fees
         const gasFees = await checkGasFee();
@@ -388,8 +390,11 @@ cron.schedule('*/5 * * * *', async () => {
             const { gasThreshold } = users[userId];
 
             if (gasThreshold && gasPrice <= gasThreshold) {
+                if (users[userId].previousGasMessageId != null) {
+                    await deleteTelegramMessage(userId, users[userId].previousGasMessageId, bot);
+                }
                 const message = `⛽️ *Gas Price Alert!* *${gasPrice}* sat/vB`;
-                sendTelegramMessage(userId, message, bot);
+                users[userId].previousGasMessageId = await sendTelegramMessage(userId, message, bot);                
             }
         }
     } catch (error) {
